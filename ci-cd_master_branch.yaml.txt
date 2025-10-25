@@ -1,0 +1,74 @@
+
+name: FastAPI-CI/CD-Demo-App-Pipeline
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Tests
+        id: run_tests
+        run: |
+          pytest || echo "Tests failed" > test_status.txt
+
+      - name: Check Test Status
+        id: check_status
+        run: |
+          if [ -f test_status.txt ]; then
+            echo "status=failed" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build & Push Docker Image If Tests Passed
+        if: steps.check_status.outputs.status == 'success'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+        run: |
+        
+            echo "✅ Tests passed. Building Docker image..."
+            # Login to Docker Hub
+            echo $DOCKERHUB_PASSWORD | docker login -u $DOCKERHUB_USERNAME --password-stdin
+
+            # Build Docker image
+            docker build -t $DOCKERHUB_USERNAME/python-fastapi-ci-cd-demo:latest -f Dockerfile_local_machine .
+
+            # Push Docker image to Docker Hub
+            docker push $DOCKERHUB_USERNAME/python-fastapi-ci-cd-demo:latest
+
+      - name: Send Email If Tests Failed
+        if: steps.check_status.outputs.status == 'failed'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.GMAIL_USER }}
+          password: ${{ secrets.GMAIL_PASS }}
+          subject: "❌ CI/CD Pipeline Failed for ${{ github.repository }}"
+          to: cjain9975@gmail.com
+          from: ${{ secrets.GMAIL_USER }}
+          body: |
+            Hello Chirag,
+            The latest CI/CD pipeline failed for repository: ${{ github.repository }}
+            Commit: ${{ github.sha }}
+            Branch: ${{ github.ref_name }}
+            Author: ${{ github.actor }}
+            Please check the GitHub Actions logs for details.

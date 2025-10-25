@@ -1,0 +1,106 @@
+
+name: FastAPI-CI/CD-Demo-App-Pipeline
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  ci-cd-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # 1️⃣ Checkout dev branch with full history
+      - name: Checkout Dev Branch
+        uses: actions/checkout@v3
+        with:
+          # Fetch all branches/refs so 'master' is available for comparison
+          fetch-depth: 0 
+          # Or a deep enough depth, but 0 is easiest for comparison
+      
+      # 2️⃣ Set up Python
+      - name: Set up Python Environment
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      # 3️⃣ Install dependencies
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov flake8
+
+      # 4️⃣ Run tests
+      - name: Run Tests
+        id: run_tests
+        run: |
+          echo "🧪 Running tests..."
+          pytest || echo "Tests failed" > test_status.txt
+
+      # 5️⃣ Check test result
+      - name: Check Test Status
+        id: check_status
+        run: |
+          if [ -f test_status.txt ]; then
+            echo "status=failed" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+
+      # 6️⃣ Build & push Docker image if tests pass
+      - name: Build & Push Docker Image (Dev)
+        if: steps.check_status.outputs.status == 'success'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+        run: |
+          echo $DOCKERHUB_PASSWORD | docker login -u $DOCKERHUB_USERNAME --password-stdin
+          IMAGE_TAG=$DOCKERHUB_USERNAME/python-fastapi-ci-cd-demo:dev-${GITHUB_SHA}
+          docker build -t $IMAGE_TAG -f Dockerfile_local_machine .
+          docker push $IMAGE_TAG
+          echo "✅ Docker image pushed: $IMAGE_TAG"
+
+      # 7️⃣ Send email if tests fail
+      - name: Send Email If Tests Failed
+        if: steps.check_status.outputs.status == 'failed'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.GMAIL_USER }}
+          password: ${{ secrets.GMAIL_PASS }}
+          from: ${{ secrets.GMAIL_USER }}
+          to: cjain9975@gmail.com
+          subject: "❌ CI/CD Pipeline Failed for ${{ github.repository }}"
+          body: |
+            Hello Chirag,
+            The latest CI/CD pipeline failed for repository: ${{ github.repository }}
+            Commit: ${{ github.sha }}
+            Branch: ${{ github.ref_name }}
+            Author: ${{ github.actor }}
+            Please check the GitHub Actions logs for details.
+
+        
+      # 8️⃣ Create Pull Request dev → master if tests pass
+      - name: Create Pull Request (dev → master)
+        if: steps.check_status.outputs.status == 'success'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GH_PAT }}
+          commit-message: 'Merge ${{ github.ref_name }} into master after successful CI'
+          title: 'Automated Merge: ${{ github.ref_name }} to master'
+          body: |
+            Automated Pull Request from CI/CD pipeline.
+            Tests passed and Docker image was built and pushed.
+            * **Source Branch:** `${{ github.ref_name }}`
+            * **Commit SHA:** `${{ github.sha }}`
+          branch: ${{ github.ref_name }}
+          update-branch: true
+          base: master
+          
+
+      
+      

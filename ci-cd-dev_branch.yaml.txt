@@ -1,0 +1,114 @@
+
+name: FastAPI-CI/CD-Demo-App-Pipeline
+
+on:
+  push:
+    branches:
+      - dev   # Workflow triggers only on dev branch
+
+jobs:
+  ci-cd-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # 1️⃣ Checkout dev branch with full history
+      - name: Checkout dev branch
+        uses: actions/checkout@v3
+        with:
+          ref: dev
+          fetch-depth: 0   # Full history needed for proper PR diff
+
+      # 2️⃣ Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      # 3️⃣ Install dependencies
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov flake8
+
+      # 4️⃣ Run tests
+      - name: Run Tests
+        id: run_tests
+        run: |
+          echo "🧪 Running tests..."
+          pytest --cov=. || echo "failed" > test_status.txt
+
+      # 5️⃣ Check test result
+      - name: Check Test Status
+        id: check_status
+        run: |
+          if [ -f test_status.txt ]; then
+            echo "status=failed" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+
+      # 6️⃣ Build & push Docker image if tests pass
+      - name: Build & Push Docker Image (Dev)
+        if: steps.check_status.outputs.status == 'success'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+        run: |
+          echo $DOCKERHUB_PASSWORD | docker login -u $DOCKERHUB_USERNAME --password-stdin
+          IMAGE_TAG=$DOCKERHUB_USERNAME/python-fastapi-ci-cd-demo:dev-${GITHUB_SHA}
+          docker build -t $IMAGE_TAG -f Dockerfile_local_machine .
+          docker push $IMAGE_TAG
+          echo "✅ Docker image pushed: $IMAGE_TAG"
+
+      # 7️⃣ Send email if tests fail
+      - name: Send Email If Tests Failed
+        if: steps.check_status.outputs.status == 'failed'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.GMAIL_USER }}
+          password: ${{ secrets.GMAIL_PASS }}
+          from: ${{ secrets.GMAIL_USER }}
+          to: cjain9975@gmail.com
+          subject: "❌ CI/CD Pipeline Failed for ${{ github.repository }}"
+          body: |
+            Hello Chirag,
+            The latest CI/CD pipeline failed for repository: ${{ github.repository }}
+            Commit: ${{ github.sha }}
+            Branch: ${{ github.ref_name }}
+            Author: ${{ github.actor }}
+            Please check the GitHub Actions logs for details.
+
+      
+      - name: Clean dev branch
+        run: |
+          git checkout dev
+          git reset --hard
+
+      - name: Rebase dev onto master
+        run: |
+          git fetch origin master
+          git checkout dev
+          git rebase origin/master
+      
+
+      # 8️⃣ Create Pull Request dev → master if tests pass
+      - name: Create Pull Request (dev → master)
+        if: steps.check_status.outputs.status == 'success'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GH_PAT }}
+          base: master
+          head: dev
+          branch: auto-pr/dev-to-master
+          title: "CI/CD: Merge dev into master"
+          body: |
+            ✅ All tests passed on dev branch.
+            Auto-generated PR to merge dev → master.
+          commit-message: "CI/CD: Merge dev into master"
+          branch-suffix: timestamp   # <-- ensures unique PR branch every run
+          delete-branch: false
+          draft: false

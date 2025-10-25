@@ -1,0 +1,10 @@
+
+services:
+  fastapi-cicd-demo-app-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile_local_machine
+    container_name: fastapi-cicd-demo-app-pipeline
+    ports:
+      - "8000:8000"
+    restart: always
